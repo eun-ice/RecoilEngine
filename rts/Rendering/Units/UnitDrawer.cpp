@@ -2111,4 +2111,3 @@ void CUnitDrawerGL4::DrawUnitModelBeingBuiltOpaque(const CUnit* unit, bool noLua
 
 	glPopAttrib();
 }
-
