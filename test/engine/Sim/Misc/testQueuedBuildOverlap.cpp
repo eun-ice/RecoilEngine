@@ -151,13 +151,30 @@ TEST_CASE("Queued build overlap is directional")
 {
 	const std::vector<YardMapStatus> buildOnly = {YARDMAP_BUILDONLY};
 	const std::vector<YardMapStatus> blocked = {YARDMAP_BLOCKED};
+	const std::vector<YardMapStatus> exitOnly = {YARDMAP_EXITONLY};
+	const std::vector<YardMapStatus> geoStackable = {YARDMAP_GEOSTACKABLE};
+	const std::vector<YardMapStatus> open = {YARDMAP_OPEN};
+	const std::vector<YardMapStatus> stackable = {YARDMAP_STACKABLE};
 	UnitDef buildOnlyDef;
 	UnitDef blockedDef;
+	UnitDef exitOnlyDef;
+	UnitDef geoStackableDef;
+	UnitDef openDef;
+	UnitDef stackableDef;
 	const auto buildOnlyFootprint = MakeBuildInfo({0, 0}, {1, 1}, FACING_SOUTH, &buildOnlyDef, buildOnly);
 	const auto blockedFootprint = MakeBuildInfo({0, 0}, {1, 1}, FACING_SOUTH, &blockedDef, blocked);
+	const auto exitOnlyFootprint = MakeBuildInfo({0, 0}, {1, 1}, FACING_SOUTH, &exitOnlyDef, exitOnly);
+	const auto geoStackableFootprint = MakeBuildInfo({0, 0}, {1, 1}, FACING_SOUTH, &geoStackableDef, geoStackable);
+	const auto openFootprint = MakeBuildInfo({0, 0}, {1, 1}, FACING_SOUTH, &openDef, open);
+	const auto stackableFootprint = MakeBuildInfo({0, 0}, {1, 1}, FACING_SOUTH, &stackableDef, stackable);
 
 	CHECK(QueuedBuildOverlap::Test(buildOnlyFootprint, blockedFootprint) == QueuedBuildOverlap::Result::NONE);
 	CHECK(QueuedBuildOverlap::Test(blockedFootprint, buildOnlyFootprint) == QueuedBuildOverlap::Result::CANCEL);
+	CHECK(QueuedBuildOverlap::Test(blockedFootprint, stackableFootprint) == QueuedBuildOverlap::Result::NONE);
+	CHECK(QueuedBuildOverlap::Test(blockedFootprint, geoStackableFootprint) == QueuedBuildOverlap::Result::NONE);
+	CHECK(QueuedBuildOverlap::Test(exitOnlyFootprint, openFootprint) == QueuedBuildOverlap::Result::NONE);
+	CHECK(QueuedBuildOverlap::Test(exitOnlyFootprint, stackableFootprint) == QueuedBuildOverlap::Result::NONE);
+	CHECK(QueuedBuildOverlap::Test(exitOnlyFootprint, blockedFootprint) == QueuedBuildOverlap::Result::CANCEL);
 }
 
 TEST_CASE("Queued build yardmap index handles every facing")
