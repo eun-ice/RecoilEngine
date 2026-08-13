@@ -66,7 +66,7 @@ void CModInfo::ResetState()
 		constructionDecayTime  = int(6.66 * GAME_SPEED);
 		constructionDecaySpeed = 0.03f;
 		insertBuiltUnitMoveCommand = true;
-		useYardmapsForQueuedBuildOverlap = true;
+		useYardmapsForQueuedBuildOverlap = false;
 	}
 	{
 		debrisDamage = 50.0f;
