@@ -3916,15 +3916,15 @@ void CGuiHandler::DrawMapStuff(bool onMiniMap)
 							const CCommandAI* cai = su->commandAI;
 							const CBuilderCAI* builderCAI = dynamic_cast<const CBuilderCAI*>(cai);
 							const std::vector<Command> overlapCommands = cai->GetOverlapQueued(c);
+							unsigned int activeBuildCommandTag = 0;
+							const bool hasActiveBuildCommand =
+								builderCAI != nullptr && builderCAI->GetCurrentBuildCommandTag(activeBuildCommandTag);
 
 							for (const Command& cmd: overlapCommands) {
-								buildCommands.push_back(cmd);
-
-								const bool activeBuild =
-									builderCAI != nullptr && builderCAI->HasCurrentBuild() &&
-									!cai->commandQue.empty() && cmd.GetTag() == cai->commandQue.front().GetTag();
-								if (activeBuild)
+								if (hasActiveBuildCommand && cmd.GetTag() == activeBuildCommandTag)
 									continue;
+
+								buildCommands.push_back(cmd);
 
 								const BuildInfo queuedBuild(cmd);
 								if (QueuedBuildOverlap::IsInsideCancellationRectangle(queuedBuild, bi))
