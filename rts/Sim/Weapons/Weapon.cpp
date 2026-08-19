@@ -1151,9 +1151,9 @@ bool CWeapon::HaveFreeLineOfFire(const float3& srcPos, const float3& tgtPos, con
 }
 
 
-bool CWeapon::TryTarget(const SWeaponTarget& trg) const {
+bool CWeapon::TryTarget(const SWeaponTarget& trg, bool preFire) const {
 	RECOIL_DETAILED_TRACY_ZONE;
-	return TryTarget(GetLeadTargetPos(trg), trg);
+	return TryTarget(GetLeadTargetPos(trg), trg, preFire);
 }
 
 
