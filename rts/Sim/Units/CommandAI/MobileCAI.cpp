@@ -77,9 +77,13 @@ CR_REG_METADATA(CMobileCAI, (
 
 	CR_MEMBER(lastCommandFrame),
 	CR_MEMBER(lastCloseInTry),
+	CR_MEMBER(blockedAttackTargetID),
+	CR_MEMBER(blockedAttackWeaponNum),
 	CR_MEMBER(lastBuggerOffTime),
 	CR_MEMBER(buggerOffAttempts),
 	CR_MEMBER(lastIdleCheck),
+	CR_MEMBER(blockedAttackRetryActive),
+	CR_MEMBER(blockedAttackWeaponDir),
 
 	CR_PREALLOC(GetPreallocContainer)
 ))
@@ -708,6 +712,9 @@ void CMobileCAI::ExecuteObjectAttack(Command& c)
 	bool tryTargetRotate  = false;
 	bool tryTargetHeading = false;
 	bool tryOwnerRotation = false; // if a weapon doesn't swivel to aim we've got to know about it to rotate the owner instead
+	bool attackWeaponReady = false;
+	int attackWeaponNum = -1;
+	float3 attackWeaponDir;
 
 	float edgeFactor = 0.0f; // percent offset to target center
 
@@ -747,17 +754,83 @@ void CMobileCAI::ExecuteObjectAttack(Command& c)
 
 		edgeFactor = math::fabs(w->weaponDef->targetBorder);
 
-		if (tryTargetRotate)
+		if (tryTargetRotate) {
+			attackWeaponReady = (w->reloadStatus <= gs->frameNum);
+			attackWeaponNum = w->weaponNum;
 			break;
+		}
 
 		tryOwnerRotation |= w->WantOwnerRotation();
+	}
+
+	if (!owner->unitDef->strafeToAttack) {
+		// Recovery is only needed inside the close-enough branch below, which
+		// starts inside 90% of maxRange. Outside it, the normal close-in path
+		// already sets a goal toward the target.
+		if (targetMidPosDist2D >= (owner->maxRange * 0.9f)) {
+			blockedAttackRetryActive = false;
+			lastCloseInTry = gs->frameNum;
+		} else {
+			if (blockedAttackTargetID != orderTarget->id) {
+				blockedAttackTargetID = orderTarget->id;
+				blockedAttackWeaponNum = -1;
+				blockedAttackRetryActive = false;
+				lastCloseInTry = gs->frameNum;
+			}
+
+			// Keep observing the weapon whose rotated firing solution caused the
+			// unit to stop, even if that hypothetical solution later disappears.
+			if (tryTargetRotate && blockedAttackWeaponNum != attackWeaponNum) {
+				blockedAttackWeaponNum = attackWeaponNum;
+				blockedAttackRetryActive = false;
+				lastCloseInTry = gs->frameNum;
+			} else if (!tryTargetRotate && blockedAttackWeaponNum >= 0) {
+				attackWeaponNum = blockedAttackWeaponNum;
+				attackWeaponReady = (owner->weapons[attackWeaponNum]->reloadStatus <= gs->frameNum);
+			}
+
+			if (attackWeaponNum >= 0) {
+				CWeapon* attackWeapon = owner->weapons[attackWeaponNum];
+
+				// Refresh the actual emit direction so a slowly rotating weapon keeps
+				// resetting the recovery timeout even while angleGood remains false.
+				attackWeapon->UpdateWeaponVectors();
+				attackWeaponDir = attackWeapon->weaponDir;
+			}
+
+			const bool attackStalled = (
+				owner->moveType->progressState != AMoveType::Active ||
+				owner->pos.SqDistance2D(owner->moveType->oldSlowUpdatePos) < 1.0f
+			);
+			const bool attackWeaponRotated = (blockedAttackWeaponDir.SqDistance(attackWeaponDir) > Square(1e-4f));
+
+			if (!blockedAttackRetryActive && (!attackWeaponReady || attackWeaponRotated || !attackStalled || owner->lastFireWeapon > lastCloseInTry)) {
+				lastCloseInTry = gs->frameNum;
+				blockedAttackWeaponDir = attackWeaponDir;
+			}
+
+			const bool blockedAttack = (
+				attackWeaponNum >= 0 &&
+				attackWeaponReady &&
+				attackStalled &&
+				owner->lastFireWeapon <= lastCloseInTry
+			);
+
+			if (blockedAttackRetryActive && owner->lastFireWeapon > lastCloseInTry) {
+				blockedAttackRetryActive = false;
+				lastCloseInTry = gs->frameNum;
+			} else if (blockedAttack && !blockedAttackRetryActive && gs->frameNum > (lastCloseInTry + MAX_CLOSE_IN_RETRY_TICKS)) {
+				blockedAttackRetryActive = true;
+				lastCloseInTry = gs->frameNum;
+			}
+		}
 	}
 
 	// if w->AttackUnit() returned true then we are already
 	// in range with our biggest (?) weapon, so stop moving
 	// also make sure that we're not locked in close-in/in-range state
 	// loop due to rotates invoked by in-range or out-of-range states
-	if (tryTargetRotate) {
+	if (tryTargetRotate && !blockedAttackRetryActive) {
 		const bool canChaseTarget = (!owner->unitDef->stopToAttack) && (owner->moveState != MOVESTATE_HOLDPOS);
 		const bool targetBehind = (targetMidPosVec.dot(orderTarget->speed) < 0.0f);
 
@@ -786,6 +859,13 @@ void CMobileCAI::ExecuteObjectAttack(Command& c)
 
 	// target is probably close enough
 	if (targetMidPosDist2D < (owner->maxRange * 0.9f)) {
+		if (blockedAttackRetryActive) {
+			const float3 norm = (targetErrPos - owner->pos).Normalize();
+			owner->AttackUnit(orderTgtInfo.unit, orderTgtInfo.isUserTarget, orderTgtInfo.isManualFire);
+			SetGoal(targetErrPos - norm * CalcTargetRadius(orderTarget, orderTarget->radius, edgeFactor * 0.8f), owner->pos);
+			return;
+		}
+
 		if (owner->unitDef->IsHoveringAirUnit() || (targetMidPosVec.SqLength2D() < 1024) || tryOwnerRotation) {
 			StopMove();
 			owner->moveType->KeepPointingTo(orderTarget->midPos, minPointingDist, true);

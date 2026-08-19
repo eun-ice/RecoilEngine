@@ -101,9 +101,13 @@ protected:
 	/// last frame certain types of area-commands were handled, helps avoid infinite loops
 	int lastCommandFrame = -1;
 	int lastCloseInTry = -1;
+	int blockedAttackTargetID = -1;
+	int blockedAttackWeaponNum = -1;
 	int lastBuggerOffTime = -BUGGER_OFF_TTL;
 	int lastIdleCheck = 0;
 	int buggerOffAttempts = 0;
+	bool blockedAttackRetryActive = false;
+	float3 blockedAttackWeaponDir;
 
 	static constexpr int MAX_CLOSE_IN_RETRY_TICKS = 30;
 	static constexpr int BUGGER_OFF_TTL = 200;
