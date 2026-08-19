@@ -744,11 +744,13 @@ void CMobileCAI::ExecuteObjectAttack(Command& c)
 			continue;
 
 		tryTargetCurrent = w->TryTarget(orderTgtInfo, true);
-		tryTargetRotate  = w->TryTargetRotate(orderTgtInfo.unit, orderTgtInfo.isUserTarget, orderTgtInfo.isManualFire);
-		tryTargetHeading = w->TryTargetHeading(targetHeading, orderTgtInfo);
+		tryTargetRotate = !tryTargetCurrent && w->TryTargetRotate(orderTgtInfo.unit, orderTgtInfo.isUserTarget, orderTgtInfo.isManualFire);
 
 		edgeFactor = math::fabs(w->weaponDef->targetBorder);
 		tryOwnerRotation |= w->WantOwnerRotation();
+
+		if (tryTargetCurrent || (tryTargetRotate && tryOwnerRotation))
+			tryTargetHeading = w->TryTargetHeading(targetHeading, orderTgtInfo);
 
 		if (tryTargetCurrent || tryTargetRotate)
 			break;
