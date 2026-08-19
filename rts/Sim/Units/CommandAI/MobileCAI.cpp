@@ -705,6 +705,7 @@ void CMobileCAI::ExecuteStop(Command& c)
 void CMobileCAI::ExecuteObjectAttack(Command& c)
 {
 	RECOIL_DETAILED_TRACY_ZONE;
+	bool tryTargetCurrent = false;
 	bool tryTargetRotate  = false;
 	bool tryTargetHeading = false;
 	bool tryOwnerRotation = false; // if a weapon doesn't swivel to aim we've got to know about it to rotate the owner instead
@@ -742,22 +743,21 @@ void CMobileCAI::ExecuteObjectAttack(Command& c)
 		if (c.GetID() == CMD_MANUALFIRE && !w->weaponDef->manualfire)
 			continue;
 
+		tryTargetCurrent = w->TryTarget(orderTgtInfo, true);
 		tryTargetRotate  = w->TryTargetRotate(orderTgtInfo.unit, orderTgtInfo.isUserTarget, orderTgtInfo.isManualFire);
 		tryTargetHeading = w->TryTargetHeading(targetHeading, orderTgtInfo);
 
 		edgeFactor = math::fabs(w->weaponDef->targetBorder);
-
-		if (tryTargetRotate)
-			break;
-
 		tryOwnerRotation |= w->WantOwnerRotation();
+
+		if (tryTargetCurrent || tryTargetRotate)
+			break;
 	}
 
-	// if w->AttackUnit() returned true then we are already
-	// in range with our biggest (?) weapon, so stop moving
-	// also make sure that we're not locked in close-in/in-range state
-	// loop due to rotates invoked by in-range or out-of-range states
-	if (tryTargetRotate) {
+	// Stop when a weapon has a firing solution from its actual muzzle, or when
+	// a fixed weapon can obtain one by rotating the owner. Testing only from the
+	// aim-piece can hide terrain that still blocks the muzzle trajectory.
+	if (tryTargetCurrent || (tryTargetRotate && tryOwnerRotation)) {
 		const bool canChaseTarget = (!owner->unitDef->stopToAttack) && (owner->moveState != MOVESTATE_HOLDPOS);
 		const bool targetBehind = (targetMidPosVec.dot(orderTarget->speed) < 0.0f);
 
@@ -786,17 +786,28 @@ void CMobileCAI::ExecuteObjectAttack(Command& c)
 
 	// target is probably close enough
 	if (targetMidPosDist2D < (owner->maxRange * 0.9f)) {
-		if (owner->unitDef->IsHoveringAirUnit() || (targetMidPosVec.SqLength2D() < 1024) || tryOwnerRotation) {
+		const bool retryBlockedAttack = (
+			!owner->unitDef->strafeToAttack &&
+			(
+				owner->moveType->progressState != AMoveType::Active ||
+				owner->pos.SqDistance2D(owner->moveType->oldSlowUpdatePos) < 1.0f
+			) &&
+			gs->frameNum > (lastCloseInTry + MAX_CLOSE_IN_RETRY_TICKS)
+		);
+
+		if (owner->unitDef->IsHoveringAirUnit() || (targetMidPosVec.SqLength2D() < 1024) || (tryOwnerRotation && !retryBlockedAttack)) {
 			StopMove();
 			owner->moveType->KeepPointingTo(orderTarget->midPos, minPointingDist, true);
 			return;
 		}
 
-		// move sideways (i.e. strafe) to get a shot
-		// note that the close-enough assumption is flawed:
-		// unit may be aiming or otherwise unable to shoot
-		if (owner->unitDef->strafeToAttack) {
-			const int dirSign = Sign(int(moveDir ^= (owner->moveType->progressState == AMoveType::Failed)));
+		// Move sideways to get a shot. A non-strafing unit whose approach has
+		// ended without a firing solution also needs a lateral goal to get around
+		// terrain instead of repeatedly accepting the same blocked approach.
+		if (owner->unitDef->strafeToAttack || retryBlockedAttack) {
+			const int dirSign = retryBlockedAttack
+				? Sign(int(moveDir = !moveDir))
+				: Sign(int(moveDir ^= (owner->moveType->progressState == AMoveType::Failed)));
 
 			constexpr float sin = 0.6f;
 			constexpr float cos = 0.8f;
@@ -808,22 +819,34 @@ void CMobileCAI::ExecuteObjectAttack(Command& c)
 			goalDiff += orderTarget->pos;
 
 			SetGoal(goalDiff, owner->pos);
+
+			if (retryBlockedAttack)
+				lastCloseInTry = gs->frameNum;
+
+			return;
 		}
 
-		return;
+		// Distance alone does not guarantee a firing solution; terrain can still
+		// block every weapon. Let non-strafing units continue toward the target
+		// until a current firing solution exists instead of leaving the attack stalled.
 	}
 
 	// not a temporary order or not on hold-position; close in on target more
 	assert(!tempOrder || owner->moveState != MOVESTATE_HOLDPOS);
 
-	if (targetGoalDist > targetPosDist) {
+	const bool retryCloseIn = (
+		owner->moveType->progressState != AMoveType::Active &&
+		gs->frameNum > (lastCloseInTry + MAX_CLOSE_IN_RETRY_TICKS)
+	);
+
+	if (targetGoalDist > targetPosDist || retryCloseIn) {
 		const float3 norm = (targetErrPos - owner->pos).Normalize();
 
 		// if the target is outside LOS, this goes to its approximate position (errPos != pos)
 		// otherwise it will move us to the exact target position which should fix issues with
 		// low-range (mainly melee) weapons
 		SetGoal(targetErrPos - norm * CalcTargetRadius(orderTarget, orderTarget->radius, edgeFactor * 0.8f), owner->pos);
-		if (lastCloseInTry < (gs->frameNum + MAX_CLOSE_IN_RETRY_TICKS)) {
+		if (gs->frameNum > (lastCloseInTry + MAX_CLOSE_IN_RETRY_TICKS)) {
 			if (tryOwnerRotation)
 				owner->moveType->KeepPointingTo(orderTarget->midPos, minPointingDist, true);
 
