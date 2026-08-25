@@ -1156,6 +1156,16 @@ bool CWeapon::TryTarget(const SWeaponTarget& trg, bool preFire) const {
 	return TryTarget(GetLeadTargetPos(trg), trg, preFire);
 }
 
+bool CWeapon::TryTargetPreFire(const SWeaponTarget& trg) {
+	RECOIL_DETAILED_TRACY_ZONE;
+
+	if (fastQueryPointUpdate)
+		UpdateWeaponPieces(false);
+
+	UpdateWeaponVectors();
+	return TryTarget(GetLeadTargetPos(trg), trg, true);
+}
+
 
 bool CWeapon::TryTargetRotate(const CUnit* unit, bool userTarget, bool manualFire)
 {

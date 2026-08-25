@@ -862,7 +862,6 @@ void CMobileCAI::ExecuteGroundAttack(Command& c)
 	RECOIL_DETAILED_TRACY_ZONE;
 	const float3 attackPos = c.GetPos(0);
 	const float3 attackVec = attackPos - owner->pos;
-	const short  attackHeading = GetHeadingFromVector(attackVec.x, attackVec.z);
 	const SWeaponTarget attackTgtInfo(attackPos, !c.IsInternalOrder());
 
 	if (c.GetID() == CMD_MANUALFIRE) {
@@ -878,34 +877,81 @@ void CMobileCAI::ExecuteGroundAttack(Command& c)
 		return;
 	}
 
+	bool tryTargetCurrent = false;
+	bool tryTargetRotate = false;
+	bool tryOwnerRotation = false;
+	bool targetWeaponAngleGood = false;
+	bool targetInRange = false;
+
 	for (CWeapon* w: owner->weapons) {
-		// NOTE:
-		//   we call TryTargetHeading which is less restrictive than TryTarget
-		//   (eg. the former succeeds even if the unit has not already aligned
-		//   itself with <attackVec>)
-		if (!w->TryTargetHeading(attackHeading, attackTgtInfo))
-			continue;
+		tryTargetCurrent = w->TryTargetPreFire(attackTgtInfo);
+		tryTargetRotate = !tryTargetCurrent && w->TryTargetRotate(attackPos, attackTgtInfo.isUserTarget, false);
+		tryOwnerRotation |= w->WantOwnerRotation();
+		targetWeaponAngleGood = w->angleGood;
+		targetInRange |= w->TestRange(w->GetLeadTargetPos(attackTgtInfo), attackTgtInfo);
 
-		if (owner->AttackGround(attackTgtInfo.groundPos, attackTgtInfo.isUserTarget, false)) {
-			StopMoveAndKeepPointing(attackTgtInfo.groundPos, owner->maxRange * 0.9f, true);
-			return;
-		}
-
-		// for gunships, this pitches the nose down such that
-		// TryTargetRotate (which also checks range for itself)
-		// has a bigger chance of succeeding
-		//
-		// hence it must be called as soon as we get in range
-		// and may not depend on what TryTargetRotate returns
-		// (otherwise we might never get a firing solution)
-		owner->moveType->KeepPointingTo(attackTgtInfo.groundPos, owner->maxRange * 0.9f, true);
+		if (tryTargetCurrent || tryTargetRotate)
+			break;
 	}
 
-	if (attackVec.SqLength2D() >= Square(owner->maxRange * 0.9f))
+	// Keep the ordered position assigned while moving, but only stop for a
+	// firing solution from the current muzzle or one a fixed weapon can obtain
+	// by rotating its owner. AttackGround alone can return true for an unchanged
+	// target without repeating the real-muzzle pre-fire check.
+	owner->AttackGround(attackTgtInfo.groundPos, attackTgtInfo.isUserTarget, false);
+
+	const bool retryBlockedAttack = (
+		!owner->unitDef->strafeToAttack &&
+		(
+			owner->moveType->progressState != AMoveType::Active ||
+			owner->pos.SqDistance2D(owner->moveType->oldSlowUpdatePos) < 1.0f
+		) &&
+		gs->frameNum > (lastCloseInTry + MAX_CLOSE_IN_RETRY_TICKS)
+	);
+	const bool canStopForTarget = (
+		(tryTargetCurrent || (tryTargetRotate && tryOwnerRotation)) &&
+		!(retryBlockedAttack && !targetWeaponAngleGood)
+	);
+
+	if (canStopForTarget) {
+		if (owner->moveType->progressState == AMoveType::Active)
+			lastCloseInTry = gs->frameNum;
+
+		StopMoveAndKeepPointing(attackTgtInfo.groundPos, owner->maxRange * 0.9f, true);
+		return;
+	}
+
+	if (tryTargetRotate)
+		owner->moveType->KeepPointingTo(attackTgtInfo.groundPos, owner->maxRange * 0.9f, true);
+
+	if (!targetInRange)
 		return;
 
-	owner->AttackGround(attackTgtInfo.groundPos, attackTgtInfo.isUserTarget, false);
-	StopMoveAndKeepPointing(attackPos, owner->maxRange * 0.9f, true);
+	if (owner->unitDef->IsHoveringAirUnit() || attackVec.SqLength2D() < 1024 || (tryOwnerRotation && !retryBlockedAttack)) {
+		StopMoveAndKeepPointing(attackPos, owner->maxRange * 0.9f, true);
+		return;
+	}
+
+	if (owner->unitDef->strafeToAttack || retryBlockedAttack) {
+		const int dirSign = retryBlockedAttack
+			? Sign(int(moveDir = !moveDir))
+			: Sign(int(moveDir ^= (owner->moveType->progressState == AMoveType::Failed)));
+
+		constexpr float sin = 0.6f;
+		constexpr float cos = 0.8f;
+
+		const float3 targetToOwner = -attackVec;
+		float3 goalDiff;
+		goalDiff.x = targetToOwner.dot(float3(cos          , 0.0f, -sin * dirSign));
+		goalDiff.z = targetToOwner.dot(float3(sin * dirSign, 0.0f,  cos          ));
+		goalDiff *= (attackVec.SqLength2D() < Square(owner->maxRange * 0.3f)) ? 1.0f / cos : cos;
+		goalDiff += attackPos;
+
+		SetGoal(goalDiff, owner->pos);
+
+		if (retryBlockedAttack)
+			lastCloseInTry = gs->frameNum;
+	}
 }
 
 void CMobileCAI::ExecuteAttack(Command& c)
